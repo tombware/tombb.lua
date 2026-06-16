@@ -1,0 +1,261 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local aimlockEnabled = false
+local aimlockKey = Enum.KeyCode.Q
+local fovRadius = 250 
+local npcList = {}
+local binding = false
+local smoothness = 0 
+
+local ScreenGui = Instance.new("ScreenGui", player.PlayerGui)
+ScreenGui.Name = "DaTrack_Aim_Ultra"
+ScreenGui.ResetOnSpawn = false
+
+local FOVCircle = Instance.new("Frame", ScreenGui)
+FOVCircle.Size = UDim2.new(0, fovRadius * 2, 0, fovRadius * 2)
+FOVCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+FOVCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+FOVCircle.BackgroundTransparency = 1
+FOVCircle.BorderSizePixel = 1
+FOVCircle.BorderColor3 = Color3.fromRGB(255, 255, 0)
+FOVCircle.Visible = false
+Instance.new("UICorner", FOVCircle).CornerRadius = UDim.new(1, 0)
+
+local Main = Instance.new("Frame", ScreenGui)
+Main.Size = UDim2.new(0, 160, 0, 160)
+Main.Position = UDim2.new(0.02, 0, 0.15, 0)
+Main.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+Main.Active = true
+Main.Draggable = true
+Instance.new("UICorner", Main)
+
+local function createBtn(txt, y, col)
+    local b = Instance.new("TextButton", Main)
+    b.Size = UDim2.new(0.9, 0, 0, 30)
+    b.Position = UDim2.new(0.05, 0, 0, y)
+    b.BackgroundColor3 = col
+    b.Text = txt
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.Code
+    Instance.new("UICorner", b)
+    return b
+end
+
+local aimBtn = createBtn("LOCK: OFF", 10, Color3.fromRGB(180, 0, 0))
+local bindBtn = createBtn("BIND: Q", 45, Color3.fromRGB(40, 40, 45))
+
+local SliderBack = Instance.new("Frame", Main)
+SliderBack.Size = UDim2.new(0.9, 0, 0, 20)
+SliderBack.Position = UDim2.new(0.05, 0, 0, 90)
+SliderBack.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+Instance.new("UICorner", SliderBack)
+
+local SliderFill = Instance.new("Frame", SliderBack)
+SliderFill.Size = UDim2.new(0, 0, 1, 0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+Instance.new("UICorner", SliderFill)
+
+local SliderLabel = Instance.new("TextLabel", SliderBack)
+SliderLabel.Size = UDim2.new(1, 0, 1, 0)
+SliderLabel.BackgroundTransparency = 1
+SliderLabel.Text = "SMOOTH: 0"
+SliderLabel.TextColor3 = Color3.new(1, 1, 1)
+SliderLabel.Font = Enum.Font.Code
+SliderLabel.TextSize = 12
+
+local isSliding = false
+local function updateSlider()
+    local mousePos = UserInputService:GetMouseLocation().X
+    local relativePos = math.clamp((mousePos - SliderBack.AbsolutePosition.X) / SliderBack.AbsoluteSize.X, 0, 1)
+    SliderFill.Size = UDim2.new(relativePos, 0, 1, 0)
+    smoothness = math.floor(relativePos * 100)
+    SliderLabel.Text = "SMOOTH: " .. smoothness
+end
+
+SliderBack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then isSliding = true end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then isSliding = false end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if isSliding and input.UserInputType == Enum.UserInputType.MouseMovement then updateSlider() end
+end)
+
+local function refreshNPCs()
+    local temp = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Humanoid") then
+            local model = v.Parent
+            if model and model:IsA("Model") and not Players:GetPlayerFromCharacter(model) and model ~= player.Character then
+                local targetPart = model:FindFirstChild("Head") or model:FindFirstChild("UpperTorso") or model:FindFirstChild("HumanoidRootPart")
+                if targetPart then table.insert(temp, targetPart) end
+            end
+        end
+    end
+    npcList = temp
+end
+
+workspace.DescendantAdded:Connect(function(d) if d:IsA("Humanoid") then task.wait(0.5) refreshNPCs() end end)
+refreshNPCs()
+
+local function isVisible(target)
+    if not player.Character then return false end
+    local origin = Camera.CFrame.Position
+    local dir = (target.Position - origin).Unit * (target.Position - origin).Magnitude
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {player.Character, Camera}
+    
+    local res = workspace:Raycast(origin, dir, params)
+    return not res or res.Instance:IsDescendantOf(target.Parent)
+end
+
+local function getTarget()
+    local closest, shortest = nil, fovRadius
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    
+    for _, part in ipairs(npcList) do
+        if part and part.Parent then
+            local sPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+            if onScreen then
+                local dist = (Vector2.new(sPos.X, sPos.Y) - center).Magnitude
+                if dist < shortest and isVisible(part) then 
+                    shortest = dist
+                    closest = part 
+                end
+            end
+        end
+    end
+    return closest
+end
+
+RunService.RenderStepped:Connect(function()
+    if aimlockEnabled then
+        local target = getTarget()
+        if target then
+            local lookAt = CFrame.new(Camera.CFrame.Position, target.Position)
+            if smoothness == 0 then
+                Camera.CFrame = lookAt
+            else
+                local weight = math.clamp(1 - (smoothness / 100), 0.01, 1)
+                Camera.CFrame = Camera.CFrame:Lerp(lookAt, weight)
+            end
+        end
+    end
+end)
+
+local function toggle()
+    aimlockEnabled = not aimlockEnabled
+    aimBtn.Text = aimlockEnabled and "LOCK: ON" or "LOCK: OFF"
+    aimBtn.BackgroundColor3 = aimlockEnabled and Color3.fromRGB(0, 180, 0) or Color3.fromRGB(180, 0, 0)
+    FOVCircle.Visible = aimlockEnabled
+end
+
+--========================================================================--
+--                    tomb.ware | Unified Suite (Respawns)                 --
+--========================================================================--
+local SETTINGS = {
+    BoxColor = Color3.fromRGB(255, 0, 0),
+    Background = Color3.fromRGB(10, 10, 10)
+}
+
+local Players, RunService = game:GetService("Players"), game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local isLockActive = false
+local currentTargetPlayer = nil
+local smoothness = 0.1
+
+--// Persistent Targeting Logic
+local function getTarget()
+    -- 1. Check if current target is valid and alive
+    if currentTargetPlayer and currentTargetPlayer.Character and currentTargetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        local humanoid = currentTargetPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            return currentTargetPlayer.Character.HumanoidRootPart
+        end
+    end
+    
+    -- 2. If lost/dead, find the closest new target
+    local closest, shortest = nil, 250
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                local pos, onScreen = Camera:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
+                if onScreen then
+                    local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+                    if dist < shortest then
+                        shortest = dist
+                        closest = player.Character.HumanoidRootPart
+                        currentTargetPlayer = player -- Save player reference
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+--// UI Setup
+local function setupUI()
+    local gui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+    local main = Instance.new("Frame", gui)
+    main.Size, main.Position = UDim2.new(0, 100, 0, 300), UDim2.new(0.7, 0, 0.2, 0)
+    main.BackgroundTransparency = 1
+    
+    local targetMenu = Instance.new("Frame", main)
+    targetMenu.Size, targetMenu.Position = UDim2.new(0, 80, 0, 150), UDim2.new(1.1, 0, 0, 0)
+    targetMenu.BackgroundColor3 = SETTINGS.Background
+    Instance.new("UICorner", targetMenu)
+
+    local lockBtn = Instance.new("TextButton", targetMenu)
+    lockBtn.Size, lockBtn.Position = UDim2.new(0.9, 0, 0, 40), UDim2.new(0.05, 0, 0, 10)
+    lockBtn.Text = "LOCK: OFF"
+    lockBtn.MouseButton1Click:Connect(function() 
+        isLockActive = not isLockActive 
+        if not isLockActive then currentTargetPlayer = nil end
+        lockBtn.Text = isLockActive and "LOCK: ON" or "LOCK: OFF"
+    end)
+end
+
+--// Render Loop
+RunService.RenderStepped:Connect(function()
+    if isLockActive then
+        local targetPart = getTarget()
+        if targetPart then
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPart.Position), smoothness)
+        end
+    end
+end)
+
+setupUI()
+
+
+aimBtn.MouseButton1Click:Connect(toggle)
+bindBtn.MouseButton1Click:Connect(function()
+    binding = true
+    bindBtn.Text = "..."
+    bindBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+end)
+
+UserInputService.InputBegan:Connect(function(i, gpe)
+    if binding then
+        aimlockKey = i.KeyCode
+        bindBtn.Text = "BIND: " .. i.KeyCode.Name
+        bindBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+        binding = false
+    elseif not gpe and i.KeyCode == aimlockKey then 
+        toggle() 
+    end
+end)
+print("Open source/Thanks for using it 'v'")
